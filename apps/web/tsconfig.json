@@ -1,0 +1,11 @@
+{
+  "extends": "@uml-forge/tsconfig/vite.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "types": ["vite/client", "dom-speech-recognition"],
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["src", "e2e", "vite.config.ts", "vitest.config.ts", "playwright.config.ts"]
+}

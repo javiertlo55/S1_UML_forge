@@ -1,0 +1,94 @@
+# Pila completa de UML Forge: base de datos, API y PWA.
+#
+#   docker compose up --build                  arranca toda la aplicacion (PostgreSQL + API + Web)
+#   docker compose up -d postgres              solo PostgreSQL, para desarrollo con pnpm dev
+#
+# La PWA queda en http://localhost:8080 y la API en http://localhost:3000.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: uml-forge-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-umlforge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-umlforge}
+      POSTGRES_DB: ${POSTGRES_DB:-umlforge}
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-umlforge} -d ${POSTGRES_DB:-umlforge}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    image: uml-forge-api
+    container_name: uml-forge-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-umlforge}:${POSTGRES_PASSWORD:-umlforge}@postgres:5432/${POSTGRES_DB:-umlforge}?schema=public
+      # El origen del navegador es el de la PWA en contenedor, no el de Vite.
+      CORS_ORIGIN: http://localhost:${WEB_PORT:-8080}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-umlforge_dev_jwt_access_secret_key_32bytes_min_super_secure!}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-umlforge_dev_jwt_refresh_secret_key_32bytes_min_super_secure!}
+      COOKIE_SECRET: ${COOKIE_SECRET:-umlforge_dev_cookie_secret_key_32bytes_min_super_secure!}
+      # Esta pila local sirve HTTP; al publicar con HTTPS usa COOKIE_SECURE=true.
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      # Datos de demostracion solo si la base de datos esta vacia: un reinicio no borra nada.
+      SEED_ON_START: ${SEED_ON_START:-true}
+      AI_PROVIDER: ${AI_PROVIDER:-gemini}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-flash-latest}
+      GEMINI_FALLBACK_MODEL: ${GEMINI_FALLBACK_MODEL:-gemini-flash-lite-latest}
+      GEMINI_USE_VERTEXAI: ${GEMINI_USE_VERTEXAI:-false}
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT:-}
+      GOOGLE_CLOUD_LOCATION: ${GOOGLE_CLOUD_LOCATION:-global}
+      CHAT_EVENT_BUS: ${CHAT_EVENT_BUS:-memory}
+      # Ollama corre en la maquina anfitriona, no en la red del contenedor.
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL_DOCKER:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
+      OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL:-llava:7b}
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    ports:
+      - '${API_PORT:-3000}:3000'
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://localhost:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    image: uml-forge-web
+    container_name: uml-forge-web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - '${WEB_PORT:-8080}:80'
+
+volumes:
+  postgres-data:
+    name: uml-forge-postgres-data

@@ -1,0 +1,216 @@
+import { Test, type TestingModule } from '@nestjs/testing';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiConfigService } from '../../config/config.service';
+import { AiService } from './ai.service';
+import { GeminiProvider } from './providers/gemini.provider';
+import { OllamaProvider, hasModel, resolveModelName } from './providers/ollama.provider';
+import { parseUmlFromFreeformText } from './ai-operation-mapper';
+
+describe('AiService', () => {
+  let service: AiService;
+  let configService: {
+    aiProvider: 'gemini' | 'ollama';
+    geminiModel: string;
+    ollamaModel: string;
+    ollamaVisionModel: string;
+  };
+  let geminiProvider: {
+    providerName: string;
+    isAvailable: ReturnType<typeof vi.fn>;
+    generateFromPrompt: ReturnType<typeof vi.fn>;
+    generateFromImage: ReturnType<typeof vi.fn>;
+    suggestRefinements: ReturnType<typeof vi.fn>;
+  };
+  let ollamaProvider: {
+    providerName: string;
+    isAvailable: ReturnType<typeof vi.fn>;
+    isVisionAvailable: ReturnType<typeof vi.fn>;
+    generateFromPrompt: ReturnType<typeof vi.fn>;
+    generateFromImage: ReturnType<typeof vi.fn>;
+    suggestRefinements: ReturnType<typeof vi.fn>;
+  };
+
+  beforeEach(async () => {
+    configService = {
+      aiProvider: 'gemini',
+      geminiModel: 'gemini-2.5-flash',
+      ollamaModel: 'deepseek-r1:8b',
+      ollamaVisionModel: 'llava:7b',
+    };
+
+    geminiProvider = {
+      providerName: 'gemini',
+      isAvailable: vi.fn().mockResolvedValue(true),
+      generateFromPrompt: vi.fn().mockResolvedValue({
+        explanation: 'Modelo generado con Gemini',
+        operations: [{ type: 'addClass', class: { id: 'c1', name: 'User' } }],
+      }),
+      generateFromImage: vi.fn().mockResolvedValue({
+        explanation: 'Boceto interpretado con Gemini',
+        operations: [{ type: 'addClass', class: { id: 'c2', name: 'Product' } }],
+      }),
+      suggestRefinements: vi.fn().mockResolvedValue({
+        explanation: 'Refinamiento sugerido',
+        operations: [],
+      }),
+    };
+
+    ollamaProvider = {
+      providerName: 'ollama',
+      isAvailable: vi.fn().mockResolvedValue(true),
+      isVisionAvailable: vi.fn().mockResolvedValue(true),
+      generateFromPrompt: vi.fn().mockResolvedValue({
+        explanation: 'Modelo generado con Ollama',
+        operations: [{ type: 'addClass', class: { id: 'c3', name: 'Order' } }],
+      }),
+      generateFromImage: vi.fn().mockResolvedValue({
+        explanation: 'Boceto interpretado con Ollama',
+        operations: [{ type: 'addClass', class: { id: 'c4', name: 'Invoice' } }],
+      }),
+      suggestRefinements: vi.fn().mockResolvedValue({
+        explanation: 'Refinamiento con Ollama',
+        operations: [],
+      }),
+    };
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        AiService,
+        { provide: ApiConfigService, useValue: configService },
+        { provide: GeminiProvider, useValue: geminiProvider },
+        { provide: OllamaProvider, useValue: ollamaProvider },
+      ],
+    }).compile();
+
+    service = module.get<AiService>(AiService);
+  });
+
+  it('debe consultar el estado del proveedor activo', async () => {
+    const status = await service.getStatus();
+    expect(status.provider).toBe('gemini');
+    expect(status.available).toBe(true);
+    expect(status.model).toBe('gemini-2.5-flash');
+    expect(status.visionModel).toBe('gemini-2.5-flash');
+    expect(status.visionAvailable).toBe(true);
+  });
+
+  it('debe mostrar el proveedor de respaldo si el primario no esta disponible', async () => {
+    geminiProvider.isAvailable.mockResolvedValueOnce(false);
+    const status = await service.getStatus();
+    expect(status.provider).toBe('ollama');
+    expect(status.available).toBe(true);
+    expect(status.model).toBe('deepseek-r1:8b');
+    expect(status.visionModel).toBe('llava:7b');
+    expect(status.visionAvailable).toBe(true);
+  });
+
+  it('debe generar operaciones a partir de texto usando el proveedor primario', async () => {
+    const result = await service.generateFromPrompt({ prompt: 'Crea un modelo de usuarios' });
+    expect(result.explanation).toBe('Modelo generado con Gemini');
+    expect(result.operations).toHaveLength(1);
+    expect(geminiProvider.generateFromPrompt).toHaveBeenCalled();
+  });
+
+  it('debe conmutar transparentemente a Ollama si Gemini falla', async () => {
+    geminiProvider.generateFromPrompt.mockRejectedValueOnce(new Error('Quota exceeded'));
+    const result = await service.generateFromPrompt({ prompt: 'Crea un modelo de usuarios' });
+
+    expect(result.explanation).toContain('[Respaldo ollama]');
+    expect(ollamaProvider.generateFromPrompt).toHaveBeenCalled();
+  });
+
+  it('informa del motivo real cuando ningun proveedor puede responder', async () => {
+    geminiProvider.generateFromPrompt.mockRejectedValueOnce(
+      new Error('La clave GEMINI_API_KEY no es valida. Revisala en Google AI Studio.'),
+    );
+    ollamaProvider.isAvailable.mockResolvedValueOnce(false);
+
+    await expect(service.generateFromPrompt({ prompt: 'Crea un modelo' })).rejects.toThrow(
+      /GEMINI_API_KEY no es valida/u,
+    );
+  });
+
+  it('responde 503 si no hay ningun proveedor configurado', async () => {
+    geminiProvider.isAvailable.mockResolvedValue(false);
+    ollamaProvider.isAvailable.mockResolvedValue(false);
+
+    await expect(service.generateFromPrompt({ prompt: 'Crea un modelo' })).rejects.toMatchObject({
+      status: 503,
+    });
+  });
+
+  it('debe interpretar imagenes correctamente', async () => {
+    const result = await service.generateFromImage({
+      imageBase64:
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      mimeType: 'image/png',
+      prompt: 'Analiza el boceto',
+    });
+
+    expect(result.explanation).toBe('Boceto interpretado con Gemini');
+    expect(result.operations).toHaveLength(1);
+  });
+
+  it('debe sugerir refinamientos sobre un modelo existente', async () => {
+    const result = await service.refineModel({
+      model: {
+        id: 'm1',
+        name: 'Test',
+        classes: [],
+        enums: [],
+        relationships: [],
+        createdAt: '2026-08-30T00:00:00Z',
+        updatedAt: '2026-08-30T00:00:00Z',
+      },
+    });
+
+    expect(result.explanation).toBe('Refinamiento sugerido');
+  });
+
+  describe('Ollama model resolution and fallback parsing', () => {
+    it('debe resolver variantes de tags de modelos de Ollama correctamente', () => {
+      const installed = ['llava:latest', 'qwen2.5:3b', 'mistral:7b'];
+
+      expect(hasModel(installed, 'llava:7b')).toBe(true);
+      expect(hasModel(installed, 'llava:latest')).toBe(true);
+      expect(hasModel(installed, 'llava')).toBe(true);
+      expect(hasModel(installed, 'qwen2.5:3b')).toBe(true);
+      expect(hasModel(installed, 'non-existent')).toBe(false);
+
+      expect(resolveModelName(installed, 'llava:7b')).toBe('llava:latest');
+      expect(resolveModelName(installed, 'qwen2.5:3b')).toBe('qwen2.5:3b');
+      expect(resolveModelName(installed, 'mistral')).toBe('mistral:7b');
+    });
+
+    it('debe extraer operaciones UML a partir de texto libre o markdown', () => {
+      const freeform = `
+        Class: Customer
+        - id: Long
+        - email: String
+        - fullName: String
+        Methods:
+        - register(): void
+
+        Class: Order
+        - id: Long
+        - total: BigDecimal
+
+        Enum Status: PENDING, APPROVED, REJECTED
+
+        Customer (1) -> (0..*) Order
+      `;
+
+      const operations = parseUmlFromFreeformText(freeform);
+      expect(operations.length).toBeGreaterThanOrEqual(4);
+
+      const classOps = operations.filter((op) => op.type === 'addClass');
+      expect(classOps.length).toBe(2);
+
+      const enumOps = operations.filter((op) => op.type === 'addEnum');
+      expect(enumOps.length).toBe(1);
+
+      const relOps = operations.filter((op) => op.type === 'addRelationship');
+      expect(relOps.length).toBe(1);
+    });
+  });
+});

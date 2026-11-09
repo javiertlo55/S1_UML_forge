@@ -1,0 +1,112 @@
+# UML Forge
+
+PWA colaborativa de modelado UML 2.5 que genera un backend Spring Boot funcional
+a partir del modelo. Monorepo pnpm + Turborepo. Proyecto academico con defensa
+presencial.
+
+## Regla de andamiaje (obligatoria desde la Fase 2)
+
+**El andamiaje se genera SIEMPRE con la CLI oficial. Esta prohibido escribir a
+mano los ficheros que esas CLI producen.** Ver
+[ADR 0011](docs/adr/0011-andamiaje-con-cli-oficiales.md).
+
+| Andamiaje               | Orden                                                             |
+| ----------------------- | ----------------------------------------------------------------- |
+| `apps/api`              | `@nestjs/cli new` con `--skip-git --skip-install`                 |
+| `apps/web`              | `pnpm create vite` con plantilla `react-ts`                       |
+| Componentes de interfaz | `shadcn init`, y `shadcn add <componente>` uno por uno            |
+| Base de datos           | `prisma init`                                                     |
+| Arbol de rutas          | lo genera `@tanstack/router-plugin`; el `routeTree` no se escribe |
+
+Tras cada CLI viene la adaptacion al monorepo, que si es trabajo propio y se
+reporta: eliminar `.git` y ficheros de bloqueo propios, alinear el `package.json`
+con los workspaces, apuntar el `tsconfig.json` a `@uml-forge/tsconfig` y la
+configuracion de ESLint a `@uml-forge/eslint-config`.
+
+Si una CLI genera algo que contradice la especificacion del proyecto, se avisa
+antes de sobrescribirlo.
+
+Se escribe a mano solo el codigo de dominio: `packages/uml-core`,
+`packages/codegen-springboot`, `packages/xmi`, los nodos del lienzo, la capa de
+sincronizacion y la interfaz propia.
+
+## Reglas inviolables
+
+1. No inventar librerias, APIs ni nombres de paquete. Ante la duda, preguntar.
+2. No fijar versiones de parche inventadas. Instalar con `pnpm add <paquete>@<mayor>`
+   y reportar la version resuelta. Prohibidas las versiones candidatas.
+3. Prohibido el tipo `any`. TypeScript en modo `strict`. Prohibido `@ts-ignore`.
+   ESLint bloquea las tres cosas con severidad de error.
+4. Cada fase termina con `pnpm typecheck && pnpm lint && pnpm test && pnpm build`
+   en verde. Si algo falla, se arregla antes de reportar.
+5. Identificadores de codigo en ingles. Comentarios y documentacion en espanol.
+6. Ningun fichero supera las 300 lineas. Se divide en modulos.
+7. Toda decision de diseno no especificada se documenta en `docs/adr/`.
+8. Sin emojis en codigo, commits ni documentacion.
+9. Prohibido `console.log` en codigo de produccion.
+10. Toda variable de entorno nueva va a `.env.example` y al README en el mismo commit.
+
+## Metodo de trabajo por fases
+
+Se trabaja fase a fase. Al terminar cada una: reportar que se construyo, que
+ordenes de verificacion se ejecutaron y su resultado, y **esperar aprobacion
+explicita**. No se avanza a la siguiente fase por cuenta propia.
+
+## Comandos
+
+| Comando                | Efecto                                    |
+| ---------------------- | ----------------------------------------- |
+| `pnpm typecheck`       | Comprobacion de tipos de todo el monorepo |
+| `pnpm lint`            | ESLint 9 con reglas basadas en tipos      |
+| `pnpm test`            | Bateria de pruebas                        |
+| `pnpm e2e`             | Pruebas E2E de navegador con Playwright   |
+| `pnpm build`           | Compilacion de paquetes y aplicaciones    |
+| `pnpm format`          | Prettier en modo escritura                |
+| `docker compose up -d` | PostgreSQL 16 de desarrollo               |
+
+## Estado
+
+| Fase | Contenido                                                    | Estado     |
+| ---- | ------------------------------------------------------------ | ---------- |
+| 0    | Monorepo, configuracion compartida, Docker, CI               | Completada |
+| 1    | `packages/uml-core`: metamodelo, operaciones, validador, Yjs | Completada |
+| 2    | `apps/api`: Nest, Prisma, auth, proyectos, health            | Completada |
+| 3    | `apps/web`: Vite, Tailwind v4, shadcn, rutas, PWA            | Completada |
+| 4    | Editor: React Flow, nodos y aristas UML, colaboracion        | Completada |
+| 5    | Modo offline, cola de salida, politicas de conflicto         | Completada |
+| 6    | Generador Spring Boot y sus seis modelos de prueba           | Completada |
+| 7    | XMI 2.1: exportacion, importacion tolerante, auto-layout     | Completada |
+| 8    | IA de servidor: Gemini (@google/genai) y respaldo Ollama     | Completada |
+| 9    | Datos semilla, integracion final y documentacion             | Completada |
+| 10   | Asistente de IA en la PWA: voz, imagen y aplicacion revisada | Completada |
+| 11   | Pruebas E2E de navegador con Playwright                      | Completada |
+
+## Puntos que conviene recordar
+
+- `packages/uml-core` es la unica fuente de verdad de los tipos UML. Ni la PWA ni
+  la API los redefinen.
+- Nada en `uml-core` lanza excepciones: todo devuelve `Result<T, UmlError>`.
+- El documento Yjs se persiste SIEMPRE como binario (`Bytes`), jamas serializado
+  a JSON: hacerlo rompe la fusion de actualizaciones.
+- Las importaciones relativas de los paquetes compartidos llevan extension `.js`,
+  porque se compilan a ESM y a CommonJS a la vez (ADR 0010).
+- Prohibida la IA local en el navegador (sin `@mlc-ai/web-llm` ni `@huggingface/transformers`). Toda la IA de UML Forge corre en el servidor (ADR 0018).
+- La IA en servidor (Fase 8) usa por defecto la **Gemini Developer API** con el SDK unificado `@google/genai` (`GEMINI_MODEL`, `responseMimeType: 'application/json'` con `responseSchema`) y cuenta con `OllamaProvider` como respaldo local sin internet. Ambas implementaciones de `AiProvider` pasan los mismos tests de contrato (ADR 0019).
+- El reconocimiento de voz en el navegador usa exclusivamente la Web Speech API nativa, degradando a texto si no está soportada.
+- El generador de Spring Boot llega al usuario por `POST /api/projects/:id/codegen/springboot`, que devuelve el proyecto en ZIP (ADR 0025). El modelo se reconstruye en el servidor desde `YDocState`, no desde el cliente.
+- Los cursores y la presencia viajan por el canal de awareness de Hocuspocus, jamas por el CRDT (ADR 0026).
+- La presencia se lee de `onAwarenessUpdate`/`onAwarenessChange` del proveedor, no del objeto `awareness`, y la identidad se reanuncia en `onSynced`: sin eso, quien ya estaba en el lienzo tardaba diez segundos en ver entrar a otro.
+- Toda llamada a la IA desde la PWA pasa por `apps/web/src/features/ai/aiClient.ts`, y sus operaciones se aplican con `applyOperation` del lienzo (ADR 0027).
+- La salida de la IA nunca se aplica sola: se muestra como propuesta y la persona confirma (ADR 0028). El dictado usa la Web Speech API nativa con tipos de `@types/dom-speech-recognition`.
+- El XMI se exporta con los espacios de nombres de la OMG, los tipos por referencia (`uml:PrimitiveType`) y las asociaciones con sus dos `memberEnd`; se importa recorriendo paquetes anidados y aceptando extremos declarados como `ownedAttribute` de la clase (ADR 0029). Nunca escribir `type="String"` en crudo.
+- El XMI usa el dialecto de Enterprise Architect para que la herramienta cree el diagrama (ADR 0033): todo `xmi:id` es `EAID_`/`EAPK_` (se calcula con `eaId`, nunca a mano), un unico `uml:Package` contiene elementos y diagrama, y los primitivos son `EAJava_<Nombre>` declarados en `primitivetypes`.
+- Exportar e importar XMI se bloquea mientras alguien edita (campo `editing` del awareness, 3 s tras el ultimo cambio) y la revision del modelo vive en la raiz Yjs `versioning`, fuera del historial de deshacer (ADR 0034).
+- Toda propuesta de la IA pasa por `normalizeAiOperations` antes de salir de la API: reutiliza clases por nombre, traduce tipos a referencias validas y coloca lo nuevo bajo el diagrama (ADR 0035).
+- Despliegue en Cloud Run (ADR 0041): `scripts/deploy-cloudrun.sh`. La API va con `--max-instances=1` porque el documento Yjs vive en memoria; nginx es una plantilla (`API_UPSTREAM`, `API_HOST`) y en Vertex AI no existe el alias `gemini-flash-latest` (se usa `gemini-3.5-flash`).
+- La siembra al arrancar el contenedor solo actua con la base de datos vacia (`SEED_ONLY_IF_EMPTY`): `pnpm seed` borra todo (ADR 0039).
+- El backend generado incluye Maven Wrapper, Java 17, Swagger y perfiles `h2`/`postgres`; H2 es la opcion por defecto porque arranca en cualquier equipo (ADR 0038).
+- El backend generado trae `postman/` con coleccion v2.1, entorno y guia (ADR 0043). Sus entidades anidadas se serializan sin sus relaciones (`@JsonIgnoreProperties`) y con `open-in-view=true`: sin eso todo `GET` con relaciones respondia 500. Probarlo de verdad es arrancar el backend y pasar la coleccion con Newman.
+- Chat de grupo con IA (ADR 0042): mensajes en `chat_messages`, tiempo real por SSE con bus intercambiable (`CHAT_EVENT_BUS`: memoria o PostgreSQL `LISTEN/NOTIFY`), la IA lee el modelo vivo con `CollabService.currentModel` y las propuestas se aplican en el servidor con `CollabService.applyOperations` (conexion directa de Hocuspocus), nunca desde el cliente.
+- El chat admite imagenes y notas de voz (`chat_attachments`, ADR 0044): las notas de voz se transcriben siempre, la IA recibe el adjunto tal cual, responde en streaming (borradores por el bus) y razona acotado con `thinkingFor` (niveles en Gemini 3, presupuesto en Gemini 2.5, que rechaza los niveles).
+- La IA del chat tambien renombra, modifica y elimina (`changes` en la propuesta, ADR 0045): los elementos se nombran y `mapAiChanges` los resuelve; la propuesta se vuelve a normalizar contra el modelo vivo al pulsar "Aplicar", de modo que nunca duplica lo que ya entro.
+- Ollama: modelo de texto y modelo de vision son variables distintas (`OLLAMA_MODEL`, `OLLAMA_VISION_MODEL`), `isAvailable` comprueba que el modelo este descargado y la respuesta se limpia de bloques `<think>` y vallas de codigo antes de interpretarla (ADR 0030).
